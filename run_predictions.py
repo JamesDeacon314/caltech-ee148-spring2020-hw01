@@ -2,6 +2,8 @@ import os
 import numpy as np
 import json
 from PIL import Image
+import cv2
+import math
 
 def detect_red_light(I):
     '''
@@ -21,36 +23,55 @@ def detect_red_light(I):
 
     bounding_boxes = [] # This should be a list of lists, each of length 4. See format example below.
 
-    '''
-    BEGIN YOUR CODE
-    '''
+    # Format the image
+    image = cv2.cvtColor(I, cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    '''
-    As an example, here's code that generates between 1 and 5 random boxes
-    of fixed size and returns the results in the proper format.
-    '''
+    # Hue thresholds
+    min_sat = min(90, int(cv2.mean(hsv)[2]))
+    lower_red1 = np.array([0, min_sat, min_sat])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([160, min_sat, min_sat])
+    upper_red2 = np.array([180, 255, 255])
+    lower_not_red = np.array([30, min_sat, min_sat])
+    upper_not_red = np.array([150, 255, 255])
 
-    box_height = 8
-    box_width = 6
+    # Mask generation
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    maskr = cv2.add(mask1, mask2)
 
-    num_boxes = np.random.randint(1,5)
+    maskbg = cv2.bitwise_not(cv2.inRange(hsv, lower_not_red, upper_not_red))
+    maskr = cv2.bitwise_and(maskr, maskbg)
 
-    for i in range(num_boxes):
-        (n_rows,n_cols,n_channels) = np.shape(I)
+    # Mask filtering
+    kernele = np.ones((2,2),np.uint8)
+    kernel = np.ones((1,1), np.uint8)
+    kerneld = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(7, 7))
+    maskr = cv2.erode(maskr,kernel,iterations=1)
+    maskr = cv2.morphologyEx(maskr, cv2.MORPH_CLOSE, kerneld, iterations=1)
+    maskr = cv2.dilate(cv2.erode(maskr,kernele,iterations=1),kernele,iterations=1)
 
-        tl_row = np.random.randint(n_rows - box_height)
-        tl_col = np.random.randint(n_cols - box_width)
-        br_row = tl_row + box_height
-        br_col = tl_col + box_width
+    # get contours
+    contours, hierarchy = cv2.findContours(maskr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        bounding_boxes.append([tl_row,tl_col,br_row,br_col])
-
-    '''
-    END YOUR CODE
-    '''
-
-    for i in range(len(bounding_boxes)):
-        assert len(bounding_boxes[i]) == 4
+    # Check if contour is a circle
+    for con in contours:
+        perimeter = cv2.arcLength(con, True)
+        area = cv2.contourArea(con)
+        if 10 > area or area > 250:
+            continue
+        if perimeter == 0:
+            break
+        circularity = 4*math.pi*(area/(perimeter*perimeter))
+        if 0.8 < circularity < 1.15:
+            mask = np.zeros(maskr.shape, np.uint8)
+            cv2.drawContours(mask, con, -1, 255, -1)
+            if cv2.mean(image, mask=mask)[2] >= 100 * min_sat / 90:
+                mean_val = cv2.mean(image, mask=mask)
+                if (mean_val[2] / (mean_val[1] + mean_val[0])) > 0.8:
+                    bbox = cv2.boundingRect(con)
+                    bounding_boxes.append([bbox[0],bbox[1],bbox[0]+bbox[2],bbox[1]+bbox[3]])
 
     return bounding_boxes
 
@@ -58,7 +79,7 @@ def detect_red_light(I):
 data_path = 'data/RedLights2011_Medium'
 
 # set a path for saving predictions:
-preds_path = '../data/hw01_preds'
+preds_path = 'data/hw01_preds'
 os.makedirs(preds_path,exist_ok=True) # create directory if needed
 
 # get sorted list of files:
